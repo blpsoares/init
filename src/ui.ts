@@ -146,8 +146,9 @@ export async function printSystemInfo(): Promise<void> {
     run('. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME" || uname -sr'),
   ]);
 
-  const user = process.env.USER ?? process.env.USERNAME ?? 'unknown';
-  const home = process.env.HOME ?? '~';
+  const user = process.env.USER ?? process.env.USERNAME
+    ?? await run('whoami').catch(() => 'unknown');
+  const home = process.env.HOME ?? await run('echo ~').catch(() => '~');
 
   const rows: [string, string][] = [
     ['OS',   distro || osName],

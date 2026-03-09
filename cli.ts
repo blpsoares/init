@@ -155,28 +155,20 @@ async function selectPackages(): Promise<Package[]> {
     return packages.filter(p => p.profiles?.includes(profile as any));
   }
 
-  // Interactive: group packages by category
-  const categories = [...new Set(packages.map(p => p.category))];
-  const choices: any[] = [];
-
-  for (const cat of categories) {
-    choices.push(new (inquirer as any).Separator(`\n  ── ${fmt.bold(cat)} ──`));
-    for (const pkg of packages.filter(p => p.category === cat)) {
-      choices.push({
-        name:    `  ${pkg.name.padEnd(22)} ${fmt.dim(pkg.description)}`,
-        value:   pkg,
-        checked: false,
-      });
-    }
-  }
+  // Interactive: flat list of all packages
+  const choices = packages.map(pkg => ({
+    name:    `${pkg.name.padEnd(22)} ${fmt.dim(pkg.description)}`,
+    value:   pkg,
+    checked: false,
+  }));
 
   const { selected } = await inquirer.prompt<{ selected: Package[] }>([
     {
       type:     'checkbox',
       name:     'selected',
-      message:  'Select packages to install:',
+      message:  'Select tools to install:',
       choices,
-      pageSize: 18,
+      pageSize: 20,
     },
   ]);
 
@@ -232,7 +224,7 @@ async function main() {
   }
 
   // Package selection
-  let selected: Package[];
+  let selected: Package[];  // may be extended by dependency resolution below
 
   if (all) {
     selected = packages;
@@ -247,6 +239,24 @@ async function main() {
     console.log(`  ${icons.info} ${fmt.info('No packages selected. Exiting.')}`);
     process.exit(0);
   }
+
+  // Resolve dependencies: inject missing required packages before their dependents
+  const resolved: Package[] = [];
+  for (const pkg of selected) {
+    if (pkg.dependencies) {
+      for (const depName of pkg.dependencies) {
+        const dep = packages.find(p => p.name === depName);
+        if (dep && !resolved.find(p => p.name === dep.name) && !selected.find(p => p.name === dep.name)) {
+          console.log(`  ${icons.info} ${fmt.warn(pkg.name)} requires ${fmt.bold(dep.name)} — adding automatically`);
+          resolved.push(dep);
+        }
+      }
+    }
+    if (!resolved.find(p => p.name === pkg.name)) {
+      resolved.push(pkg);
+    }
+  }
+  selected = resolved;
 
   // Dry-run preview
   if (isDry) {

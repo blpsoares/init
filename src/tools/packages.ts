@@ -22,6 +22,8 @@ export interface Package {
   postInstall?: string;
   /** Whether the shell needs to be reloaded after installation */
   requiresReload?: boolean;
+  /** Package names that must be installed before this one */
+  dependencies?: string[];
 }
 
 // ── Shell ─────────────────────────────────────────────────
@@ -113,6 +115,7 @@ const bun: Package = {
   checkCommand: 'which bun',
   command: 'curl -fsSL https://bun.sh/install | bash',
   requiresReload: true,
+  dependencies: ['Volta', 'Node.js LTS'],
 };
 
 // ── Containers ────────────────────────────────────────────

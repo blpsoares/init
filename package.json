@@ -1,9 +1,13 @@
 {
   "name": "my-dev-configs",
+  "version": "2.0.0",
   "module": "index.ts",
   "type": "module",
   "scripts": {
-    "build": "rm -rf dist && bun build cli.ts --compile --outfile ./dist/setup && chmod u+x ./dist/setup && cp dist/setup ~/.local/bin && echo 'alias setup=~/.local/bin/setup' >> ~/.bashrc && echo 'CLI IS ALREADY TO USE, RUN > setup'"
+    "dev":   "bun run cli.ts",
+    "check": "tsc --noEmit",
+    "build": "rm -rf dist && bun build cli.ts --compile --outfile ./dist/setup && chmod u+x ./dist/setup",
+    "install:local": "cp dist/setup ~/.local/bin/setup && chmod u+x ~/.local/bin/setup && echo 'Installed to ~/.local/bin/setup. Ensure ~/.local/bin is in your PATH.'"
   },
   "devDependencies": {
     "@types/bun": "latest",

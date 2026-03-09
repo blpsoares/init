@@ -50,10 +50,16 @@ function log(msg: string) {
 async function checkPrerequisites(): Promise<boolean> {
   section('Checking Prerequisites');
 
+  // Root user has implicit sudo — skip the check
+  const isRoot = process.getuid?.() === 0;
+
   const checks = [
     { label: 'curl available',      cmd: 'which curl',                                                   required: true  },
     { label: 'internet connection', cmd: 'curl -s --max-time 5 https://github.com > /dev/null',          required: false },
-    { label: 'sudo access',         cmd: 'sudo -n true 2>/dev/null || sudo -v 2>/dev/null',              required: true  },
+    ...(isRoot
+      ? []
+      : [{ label: 'sudo access', cmd: 'sudo -n true 2>/dev/null || sudo -v 2>/dev/null', required: true }]
+    ),
   ];
 
   let allRequired = true;
@@ -81,6 +87,8 @@ async function checkPrerequisites(): Promise<boolean> {
 
 // ── Package installation ──────────────────────────────────
 
+const isRoot = process.getuid?.() === 0;
+
 async function installPackage(pkg: Package): Promise<'success' | 'skipped' | 'error'> {
   // Skip if already installed
   if (pkg.checkCommand) {
@@ -88,10 +96,13 @@ async function installPackage(pkg: Package): Promise<'success' | 'skipped' | 'er
     if (installed) return 'skipped';
   }
 
-  log(`Installing: ${pkg.name}`);
-  log(`Command: ${pkg.command}`);
+  // Root doesn't need sudo — strip it from commands
+  const cmd = isRoot ? pkg.command.replace(/\bsudo\s+/g, '') : pkg.command;
 
-  const result = await runCommand(pkg.command, verbose);
+  log(`Installing: ${pkg.name}`);
+  log(`Command: ${cmd}`);
+
+  const result = await runCommand(cmd, verbose);
 
   log(`Exit code: ${result.exitCode}`);
   if (result.stderr) log(`stderr: ${result.stderr.slice(0, 500)}`);

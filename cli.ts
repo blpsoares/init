@@ -14,11 +14,14 @@ import {
   printSummary,
   printHelp,
   section,
-  divider,
+  statusLine,
+  box,
   fmt,
   icons,
+  stripAnsi,
   Spinner,
   type InstallResult,
+  ansi,
 } from './src/ui';
 
 import { runCommand, checkCommand } from './src/runner';
@@ -63,67 +66,67 @@ async function checkPrerequisites(): Promise<PrereqResult> {
   section('Checking Prerequisites');
 
   // ── curl ──
-  const curlSpinner = new Spinner('Checking curl…');
-  curlSpinner.start();
+  const curlSpin = new Spinner('Checking curl…');
+  curlSpin.start();
   const hasCurl = await checkCommand('which curl');
   if (hasCurl) {
-    curlSpinner.succeed(fmt.dim('curl') + '  ' + fmt.success('OK'));
+    curlSpin.succeed('curl', 'OK');
   } else {
-    curlSpinner.fail(fmt.dim('curl') + '  ' + fmt.error('not found — please install curl first'));
+    curlSpin.fail('curl', 'not found — install curl first');
     return { ok: false, useSudo: false };
   }
 
   // ── internet ──
-  const netSpinner = new Spinner('Checking internet connection…');
-  netSpinner.start();
+  const netSpin = new Spinner('Checking internet connection…');
+  netSpin.start();
   const hasNet = await checkCommand('curl -s --max-time 5 https://github.com > /dev/null');
   if (hasNet) {
-    netSpinner.succeed(fmt.dim('internet') + '  ' + fmt.success('OK'));
+    netSpin.succeed('internet', 'OK');
   } else {
-    netSpinner.warn(fmt.dim('internet') + '  ' + fmt.warn('unreachable — some installs may fail'));
+    netSpin.warn('internet unreachable — some installs may fail');
   }
 
-  // ── sudo / root ──
+  // ── root / sudo ──
   const isRoot = await checkCommand('[ "$(id -u)" = "0" ]');
 
   if (isRoot) {
-    console.log(`  ${icons.success} ${fmt.dim('privileges')}  ${fmt.success('running as root — sudo not needed')}`);
+    statusLine(`${icons.success}  ${fmt.bold('privileges')}`, fmt.success('running as root — sudo not needed'));
     return { ok: true, useSudo: false };
   }
 
-  // Ask the user whether they want to use sudo
+  // Ask user about sudo
   console.log();
   const { wantSudo } = await inquirer.prompt<{ wantSudo: boolean }>([
     {
       type:    'confirm',
       name:    'wantSudo',
-      message: 'Some packages require sudo. Do you have sudo access?',
+      message: 'Some packages require sudo — do you have sudo access?',
       default: true,
     },
   ]);
 
   if (!wantSudo) {
-    console.log(`  ${icons.warn} ${fmt.warn('Sudo disabled')} — sudo will be stripped from all commands`);
+    statusLine(`${icons.warn}  ${fmt.bold('sudo')}`, fmt.warn('disabled — commands will run without sudo'));
     return { ok: true, useSudo: false };
   }
 
-  // Check if sudo already works without a password
-  const sudoNoPass = await checkCommand('sudo -n true 2>/dev/null');
-  if (sudoNoPass) {
-    console.log(`  ${icons.success} ${fmt.dim('sudo access')}  ${fmt.success('OK (no password needed)')}`);
+  // Try passwordless sudo first
+  const noPass = await checkCommand('sudo -n true 2>/dev/null');
+  if (noPass) {
+    statusLine(`${icons.success}  ${fmt.bold('sudo')}`, fmt.success('OK (no password needed)'));
     return { ok: true, useSudo: true };
   }
 
-  // Needs a password — acquire credentials interactively (NO spinner, needs TTY)
-  console.log(`  ${icons.info} ${fmt.dim('Enter your sudo password to cache credentials:')}`);
-  const sudoResult = await runCommand('sudo -v', true /* verbose = inherit stdio */);
+  // Needs password — must NOT use a spinner here (TTY conflict)
+  console.log(`${ansi.dim}  Enter your sudo password to cache credentials:${ansi.reset}`);
+  const sudoResult = await runCommand('sudo -v', true /* inherit stdio */);
 
   if (sudoResult.exitCode !== 0) {
-    console.log(`  ${icons.error} ${fmt.error('sudo authentication failed')}`);
+    statusLine(`${icons.error}  ${fmt.bold('sudo')}`, fmt.error('authentication failed'));
     return { ok: false, useSudo: false };
   }
 
-  console.log(`  ${icons.success} ${fmt.dim('sudo access')}  ${fmt.success('OK')}`);
+  statusLine(`${icons.success}  ${fmt.bold('sudo')}`, fmt.success('OK'));
   return { ok: true, useSudo: true };
 }
 
@@ -133,11 +136,7 @@ async function installPackage(
   pkg: Package,
   useSudo: boolean,
 ): Promise<'success' | 'skipped' | 'error'> {
-  // Skip if already installed
-  if (pkg.checkCommand) {
-    const installed = await checkCommand(pkg.checkCommand);
-    if (installed) return 'skipped';
-  }
+  if (pkg.checkCommand && await checkCommand(pkg.checkCommand)) return 'skipped';
 
   const command = useSudo ? pkg.command : stripSudo(pkg.command);
 
@@ -163,21 +162,16 @@ async function selectPackages(): Promise<Package[]> {
       name:    'mode',
       message: 'How would you like to proceed?',
       choices: [
-        { name: `${fmt.bold('Interactive')}  ${fmt.dim('— Choose packages manually')}`,  value: 'interactive' },
-        { name: `${fmt.bold('Full Install')} ${fmt.dim('— Install everything')}`,         value: 'all'         },
-        { name: `${fmt.bold('Minimal')}      ${fmt.dim('— Just the essentials')}`,        value: 'minimal'     },
-        { name: `${fmt.bold('Profile')}      ${fmt.dim('— Pick a developer profile')}`,   value: 'profile'     },
+        { name: `${fmt.bold('Interactive')}   ${fmt.dim('— choose packages from a list')}`,  value: 'interactive' },
+        { name: `${fmt.bold('Full Install')}  ${fmt.dim('— install every available package')}`, value: 'all'     },
+        { name: `${fmt.bold('Minimal')}       ${fmt.dim('— just the essentials')}`,            value: 'minimal'  },
+        { name: `${fmt.bold('Profile')}       ${fmt.dim('— pick a developer role')}`,          value: 'profile'  },
       ],
     },
   ]);
 
-  if (mode === 'all') {
-    return packages;
-  }
-
-  if (mode === 'minimal') {
-    return packages.filter(p => p.essential);
-  }
+  if (mode === 'all')     return packages;
+  if (mode === 'minimal') return packages.filter(p => p.essential);
 
   if (mode === 'profile') {
     const { profile } = await inquirer.prompt<{ profile: string }>([
@@ -186,28 +180,30 @@ async function selectPackages(): Promise<Package[]> {
         name:    'profile',
         message: 'Choose a developer profile:',
         choices: [
-          { name: `Backend Developer  ${fmt.dim('(Zsh, Node.js, Bun, Docker, GitHub CLI)')}`,   value: 'backend'  },
-          { name: `Frontend Developer ${fmt.dim('(Zsh, Starship, Node.js, Bun)')}`,             value: 'frontend' },
-          { name: `DevOps Engineer    ${fmt.dim('(Docker, kubectl, GitHub CLI, GCloud)')}`,      value: 'devops'   },
-          { name: `Data Scientist     ${fmt.dim('(Python3, GCloud, Build Essentials)')}`,        value: 'data'     },
+          { name: `Backend Developer   ${fmt.dim('Node.js · Bun · Docker · GitHub CLI · Zsh')}`,  value: 'backend'  },
+          { name: `Frontend Developer  ${fmt.dim('Node.js · Bun · Starship · Zsh')}`,             value: 'frontend' },
+          { name: `DevOps Engineer     ${fmt.dim('Docker · kubectl · GitHub CLI · GCloud')}`,      value: 'devops'   },
+          { name: `Data Scientist      ${fmt.dim('Python 3 · GCloud · Build Essentials')}`,        value: 'data'     },
         ],
       },
     ]);
-
     return packages.filter(p => p.profiles?.includes(profile as any));
   }
 
-  // Interactive: group packages by category
+  // Interactive: group packages by category, none pre-selected
   const categories = [...new Set(packages.map(p => p.category))];
   const choices: any[] = [];
 
   for (const cat of categories) {
-    choices.push(new (inquirer as any).Separator(`\n  ── ${fmt.bold(cat)} ──`));
+    choices.push(new (inquirer as any).Separator(
+      `\n  ${ansi.brightBlue}── ${cat} ──${ansi.reset}`
+    ));
     for (const pkg of packages.filter(p => p.category === cat)) {
+      const nameCol = pkg.name.padEnd(20);
       choices.push({
-        name:    `  ${pkg.name.padEnd(22)} ${fmt.dim(pkg.description)}`,
+        name:    `  ${fmt.bold(nameCol)}  ${fmt.dim(pkg.description)}`,
         value:   pkg,
-        checked: pkg.essential ?? false,
+        checked: false,  // ← user decides everything, no pre-selection
       });
     }
   }
@@ -216,9 +212,9 @@ async function selectPackages(): Promise<Package[]> {
     {
       type:     'checkbox',
       name:     'selected',
-      message:  'Select packages to install:',
+      message:  'Select packages to install (space to toggle, enter to confirm):',
       choices,
-      pageSize: 18,
+      pageSize: 20,
     },
   ]);
 
@@ -227,23 +223,66 @@ async function selectPackages(): Promise<Package[]> {
 
 // ── Preview (dry-run) ─────────────────────────────────────
 
-async function previewPackages(pkgs: Package[]) {
-  section('Packages to Install (dry-run)');
+// INNER = 56. Content layout inside box.aligned(left, right):
+//   left_vis + gap(≥1) + right_vis ≤ INNER
+//   left = "    ›  Name  desc"  → prefix_vis = 4+1+2+nameLen+2 = 9+nameLen
+//   maxDesc = INNER - 10 - nameLen - tagLen  (10 = prefix 9 + min-gap 1)
+function previewDescLen(nameLen: number, tagLen: number): number {
+  return Math.max(0, 56 - 10 - nameLen - tagLen);
+}
 
+// INNER = 56. Content for box.line (no right-side alignment):
+//   "    ›  Name  desc" → prefix_vis = 9+nameLen, maxDesc = INNER - 9 - nameLen
+function reviewDescLen(nameLen: number): number {
+  return Math.max(0, 56 - 9 - nameLen);
+}
+
+async function previewPackages(pkgs: Package[]): Promise<void> {
   const categories = [...new Set(pkgs.map(p => p.category))];
 
+  console.log(box.top('Packages to Install (dry-run)'));
+  console.log(box.empty());
+
   for (const cat of categories) {
-    console.log(`  ${fmt.bold(fmt.accent(cat))}`);
+    console.log(box.line(`  ${fmt.bold(fmt.accent(cat))}`));
     for (const pkg of pkgs.filter(p => p.category === cat)) {
-      const installed = pkg.checkCommand ? await checkCommand(pkg.checkCommand) : false;
-      const tag = installed ? fmt.dim('(already installed)') : fmt.success('(will install)');
-      console.log(`    ${icons.arrow} ${fmt.bold(pkg.name)} ${tag}`);
-      console.log(`       ${fmt.dim(pkg.description)}`);
+      const installed  = pkg.checkCommand ? await checkCommand(pkg.checkCommand) : false;
+      const tag        = installed ? fmt.muted('already installed') : fmt.success('will install');
+      const tagLen     = installed ? 17 : 12;
+      const nameLen    = stripAnsi(pkg.name).length;
+      const desc       = pkg.description.slice(0, previewDescLen(nameLen, tagLen));
+      console.log(box.aligned(
+        `    ${icons.arrow}  ${fmt.bold(pkg.name)}  ${fmt.dim(desc)}`,
+        tag,
+      ));
     }
-    console.log();
+    console.log(box.empty());
   }
 
-  console.log(`  ${icons.info} Run without ${fmt.info('--dry-run')} to perform the installation.`);
+  console.log(box.line(`  ${icons.info}  Run without ${fmt.info('--dry-run')} to install.`));
+  console.log(box.bottom());
+  console.log();
+}
+
+// ── Review box ────────────────────────────────────────────
+
+function showReview(selected: Package[]): void {
+  const categories = [...new Set(selected.map(p => p.category))];
+
+  console.log(box.top('Review'));
+  console.log(box.empty());
+
+  for (const cat of categories) {
+    console.log(box.line(`  ${fmt.bold(fmt.accent(cat))}`));
+    for (const pkg of selected.filter(p => p.category === cat)) {
+      const nameLen = stripAnsi(pkg.name).length;
+      const desc    = pkg.description.slice(0, reviewDescLen(nameLen));
+      console.log(box.line(`    ${icons.arrow}  ${fmt.bold(pkg.name)}  ${fmt.dim(desc)}`));
+    }
+    console.log(box.empty());
+  }
+
+  console.log(box.bottom());
   console.log();
 }
 
@@ -258,7 +297,7 @@ async function main() {
   printBanner();
 
   if (isDry) {
-    console.log(`  ${icons.warn} ${fmt.warn('DRY RUN MODE')} — no packages will be installed\n`);
+    console.log(`  ${icons.warn}  ${fmt.warn('DRY RUN MODE')} — no packages will be installed\n`);
   }
 
   await printSystemInfo();
@@ -269,8 +308,8 @@ async function main() {
     const prereqs = await checkPrerequisites();
     if (!prereqs.ok) {
       console.log();
-      console.log(`  ${icons.error} ${fmt.error('Prerequisites not met. Aborting.')}`);
-      console.log(`  ${fmt.dim(`Install log: ${logFile}`)}`);
+      console.log(`  ${icons.error}  ${fmt.error('Prerequisites not met. Aborting.')}`);
+      console.log(`  ${fmt.dim(`Log: ${logFile}`)}`);
       process.exit(1);
     }
     useSudo = prereqs.useSudo;
@@ -282,84 +321,74 @@ async function main() {
   if (all) {
     selected = packages;
     section('Full Installation');
-    console.log(`  ${icons.info} Installing all ${fmt.bold(String(packages.length))} packages.`);
+    console.log(`  ${icons.info}  Installing all ${fmt.bold(String(packages.length))} available packages.\n`);
   } else {
     selected = await selectPackages();
   }
 
   if (selected.length === 0) {
     console.log();
-    console.log(`  ${icons.info} ${fmt.info('No packages selected. Exiting.')}`);
+    console.log(`  ${icons.info}  ${fmt.info('No packages selected. Exiting.')}`);
     process.exit(0);
   }
 
-  // Dry-run preview
   if (isDry) {
     await previewPackages(selected);
     process.exit(0);
   }
 
-  // Confirmation
-  section('Review');
-
-  const categories = [...new Set(selected.map(p => p.category))];
-  for (const cat of categories) {
-    console.log(`  ${fmt.bold(fmt.accent(cat))}`);
-    for (const pkg of selected.filter(p => p.category === cat)) {
-      console.log(`    ${icons.arrow} ${pkg.name}  ${fmt.dim(pkg.description)}`);
-    }
-  }
-
-  console.log();
+  // Show review and confirm
+  showReview(selected);
 
   const { confirmed } = await inquirer.prompt<{ confirmed: boolean }>([
     {
       type:    'confirm',
       name:    'confirmed',
-      message: `Install ${fmt.bold(String(selected.length))} package(s)?`,
+      message: `Proceed with ${fmt.bold(String(selected.length))} package(s)?`,
       default: true,
     },
   ]);
 
   if (!confirmed) {
-    console.log(`\n  ${icons.info} ${fmt.info('Installation cancelled.')}`);
+    console.log(`\n  ${icons.info}  ${fmt.info('Installation cancelled.')}`);
     process.exit(0);
   }
 
-  // Installation
+  // Install
   section('Installing');
 
-  log(`=== Session started ===`);
+  log('=== Session started ===');
   log(`Packages: ${selected.map(p => p.name).join(', ')}`);
 
   const results: InstallResult[] = [];
 
   for (const pkg of selected) {
-    const spinner = new Spinner(`${fmt.bold(pkg.name)}  ${fmt.dim(pkg.description)}`);
+    const spinner = new Spinner(
+      `${fmt.bold(pkg.name)}  ${fmt.dim(pkg.description)}`
+    );
 
     if (!verbose) spinner.start();
-    else console.log(`\n  ${icons.arrow} ${fmt.bold(pkg.name)}`);
+    else          console.log(`\n  ${icons.arrow}  ${fmt.bold(pkg.name)}`);
 
     try {
       const status = await installPackage(pkg, useSudo);
 
       if (status === 'success') {
-        spinner.succeed(`${fmt.bold(pkg.name)}  ${fmt.success('installed')}`);
+        spinner.succeed(pkg.name);
         results.push({ name: pkg.name, status: 'success' });
-
         if (pkg.postInstall) {
-          console.log(`    ${icons.info} ${fmt.dim(pkg.postInstall)}`);
+          console.log(`     ${icons.info}  ${fmt.dim(pkg.postInstall)}`);
         }
       } else if (status === 'skipped') {
-        spinner.skip(`${fmt.bold(pkg.name)}  ${fmt.dim('already installed')}`);
+        spinner.skip(pkg.name);
         results.push({ name: pkg.name, status: 'skipped' });
       } else {
-        spinner.fail(`${fmt.bold(pkg.name)}  ${fmt.error('failed')}`);
-        results.push({ name: pkg.name, status: 'error', message: 'Non-zero exit code' });
+        spinner.fail(pkg.name);
+        results.push({ name: pkg.name, status: 'error' });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      spinner.fail(`${fmt.bold(pkg.name)}  ${fmt.error(msg)}`);
+      spinner.fail(pkg.name, `error: ${msg.slice(0, 30)}`);
       results.push({ name: pkg.name, status: 'error', message: msg });
       log(`Exception for ${pkg.name}: ${msg}`);
     }
@@ -373,12 +402,10 @@ async function main() {
   );
 
   console.log();
-
   if (needsReload) {
-    console.log(`  ${icons.warn} ${fmt.warn('Restart your terminal (or run source ~/.bashrc) to apply all changes.')}`);
+    console.log(`  ${icons.warn}  ${fmt.warn('Restart your terminal or run: source ~/.bashrc')}`);
   }
-
-  console.log(`  ${icons.info} ${fmt.dim(`Full log: ${logFile}`)}`);
+  console.log(`  ${icons.info}  ${fmt.dim(`Full log: ${logFile}`)}`);
   console.log();
 
   log('=== Session ended ===');
@@ -386,6 +413,6 @@ async function main() {
 
 main().catch(err => {
   const msg = err instanceof Error ? err.message : String(err);
-  console.error(`\n  ${icons.error} ${fmt.error('Fatal: ' + msg)}\n`);
+  console.error(`\n  ${icons.error}  ${fmt.error('Fatal: ' + msg)}\n`);
   process.exit(1);
 });

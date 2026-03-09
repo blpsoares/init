@@ -1,0 +1,69 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build binary and publish release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build standalone binary
+        run: bun run build
+
+      - name: Verify binary
+        run: |
+          file dist/setup
+          ls -lh dist/setup
+
+      - name: Delete existing 'latest' release (if any)
+        run: gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create 'latest' release with binary
+        run: |
+          gh release create latest \
+            --title "Latest Build ($(date -u '+%Y-%m-%d %H:%M UTC'))" \
+            --notes "$(cat <<'EOF'
+          ## Latest Build
+
+          Automatically built from commit [${{ github.sha }}](https://github.com/${{ github.repository }}/commit/${{ github.sha }}).
+
+          ### Install
+
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/install.sh | bash
+          ```
+
+          ### Manual download
+
+          Download the `setup` binary below, then:
+
+          ```bash
+          chmod +x ./setup
+          mv ./setup ~/.local/bin/setup
+          ```
+          EOF
+          )" \
+            --latest \
+            dist/setup
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

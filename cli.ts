@@ -45,53 +45,106 @@ function log(msg: string) {
   } catch { /* ignore */ }
 }
 
+// ── Sudo helpers ──────────────────────────────────────────
+
+/** Remove all `sudo ` occurrences from a shell command string. */
+function stripSudo(cmd: string): string {
+  return cmd.replace(/\bsudo\s+/g, '');
+}
+
 // ── Prerequisite check ────────────────────────────────────
 
-async function checkPrerequisites(): Promise<boolean> {
+interface PrereqResult {
+  ok: boolean;
+  useSudo: boolean;
+}
+
+async function checkPrerequisites(): Promise<PrereqResult> {
   section('Checking Prerequisites');
 
-  const checks = [
-    { label: 'curl available',      cmd: 'which curl',                                                   required: true  },
-    { label: 'internet connection', cmd: 'curl -s --max-time 5 https://github.com > /dev/null',          required: false },
-    { label: 'sudo access',         cmd: 'sudo -n true 2>/dev/null || sudo -v 2>/dev/null',              required: true  },
-  ];
-
-  let allRequired = true;
-
-  for (const check of checks) {
-    const spinner = new Spinner(`Checking ${check.label}…`);
-    spinner.start();
-
-    const ok = await checkCommand(check.cmd);
-
-    if (ok) {
-      spinner.succeed(fmt.dim(check.label) + '  ' + fmt.success('OK'));
-    } else {
-      if (check.required) {
-        spinner.fail(fmt.dim(check.label) + '  ' + fmt.error('FAILED'));
-        allRequired = false;
-      } else {
-        spinner.warn(fmt.dim(check.label) + '  ' + fmt.warn('UNAVAILABLE'));
-      }
-    }
+  // ── curl ──
+  const curlSpinner = new Spinner('Checking curl…');
+  curlSpinner.start();
+  const hasCurl = await checkCommand('which curl');
+  if (hasCurl) {
+    curlSpinner.succeed(fmt.dim('curl') + '  ' + fmt.success('OK'));
+  } else {
+    curlSpinner.fail(fmt.dim('curl') + '  ' + fmt.error('not found — please install curl first'));
+    return { ok: false, useSudo: false };
   }
 
-  return allRequired;
+  // ── internet ──
+  const netSpinner = new Spinner('Checking internet connection…');
+  netSpinner.start();
+  const hasNet = await checkCommand('curl -s --max-time 5 https://github.com > /dev/null');
+  if (hasNet) {
+    netSpinner.succeed(fmt.dim('internet') + '  ' + fmt.success('OK'));
+  } else {
+    netSpinner.warn(fmt.dim('internet') + '  ' + fmt.warn('unreachable — some installs may fail'));
+  }
+
+  // ── sudo / root ──
+  const isRoot = await checkCommand('[ "$(id -u)" = "0" ]');
+
+  if (isRoot) {
+    console.log(`  ${icons.success} ${fmt.dim('privileges')}  ${fmt.success('running as root — sudo not needed')}`);
+    return { ok: true, useSudo: false };
+  }
+
+  // Ask the user whether they want to use sudo
+  console.log();
+  const { wantSudo } = await inquirer.prompt<{ wantSudo: boolean }>([
+    {
+      type:    'confirm',
+      name:    'wantSudo',
+      message: 'Some packages require sudo. Do you have sudo access?',
+      default: true,
+    },
+  ]);
+
+  if (!wantSudo) {
+    console.log(`  ${icons.warn} ${fmt.warn('Sudo disabled')} — sudo will be stripped from all commands`);
+    return { ok: true, useSudo: false };
+  }
+
+  // Check if sudo already works without a password
+  const sudoNoPass = await checkCommand('sudo -n true 2>/dev/null');
+  if (sudoNoPass) {
+    console.log(`  ${icons.success} ${fmt.dim('sudo access')}  ${fmt.success('OK (no password needed)')}`);
+    return { ok: true, useSudo: true };
+  }
+
+  // Needs a password — acquire credentials interactively (NO spinner, needs TTY)
+  console.log(`  ${icons.info} ${fmt.dim('Enter your sudo password to cache credentials:')}`);
+  const sudoResult = await runCommand('sudo -v', true /* verbose = inherit stdio */);
+
+  if (sudoResult.exitCode !== 0) {
+    console.log(`  ${icons.error} ${fmt.error('sudo authentication failed')}`);
+    return { ok: false, useSudo: false };
+  }
+
+  console.log(`  ${icons.success} ${fmt.dim('sudo access')}  ${fmt.success('OK')}`);
+  return { ok: true, useSudo: true };
 }
 
 // ── Package installation ──────────────────────────────────
 
-async function installPackage(pkg: Package): Promise<'success' | 'skipped' | 'error'> {
+async function installPackage(
+  pkg: Package,
+  useSudo: boolean,
+): Promise<'success' | 'skipped' | 'error'> {
   // Skip if already installed
   if (pkg.checkCommand) {
     const installed = await checkCommand(pkg.checkCommand);
     if (installed) return 'skipped';
   }
 
-  log(`Installing: ${pkg.name}`);
-  log(`Command: ${pkg.command}`);
+  const command = useSudo ? pkg.command : stripSudo(pkg.command);
 
-  const result = await runCommand(pkg.command, verbose);
+  log(`Installing: ${pkg.name}`);
+  log(`Command: ${command}`);
+
+  const result = await runCommand(command, verbose);
 
   log(`Exit code: ${result.exitCode}`);
   if (result.stderr) log(`stderr: ${result.stderr.slice(0, 500)}`);
@@ -210,14 +263,17 @@ async function main() {
 
   await printSystemInfo();
 
+  let useSudo = true;
+
   if (!isDry) {
-    const prereqsOk = await checkPrerequisites();
-    if (!prereqsOk) {
+    const prereqs = await checkPrerequisites();
+    if (!prereqs.ok) {
       console.log();
-      console.log(`  ${icons.error} ${fmt.error('Prerequisites not met — please ensure curl and sudo are available.')}`);
+      console.log(`  ${icons.error} ${fmt.error('Prerequisites not met. Aborting.')}`);
       console.log(`  ${fmt.dim(`Install log: ${logFile}`)}`);
       process.exit(1);
     }
+    useSudo = prereqs.useSudo;
   }
 
   // Package selection
@@ -285,7 +341,7 @@ async function main() {
     else console.log(`\n  ${icons.arrow} ${fmt.bold(pkg.name)}`);
 
     try {
-      const status = await installPackage(pkg);
+      const status = await installPackage(pkg, useSudo);
 
       if (status === 'success') {
         spinner.succeed(`${fmt.bold(pkg.name)}  ${fmt.success('installed')}`);

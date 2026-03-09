@@ -154,7 +154,7 @@ async function selectPackages(): Promise<Package[]> {
       choices.push({
         name:    `  ${pkg.name.padEnd(22)} ${fmt.dim(pkg.description)}`,
         value:   pkg,
-        checked: pkg.essential ?? false,
+        checked: false,
       });
     }
   }

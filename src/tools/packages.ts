@@ -83,6 +83,38 @@ const python3: Package = {
   command: 'sudo apt-get update && sudo apt-get install -y python3 python3-pip python3-venv python3-dev',
 };
 
+const pyenv: Package = {
+  name: 'pyenv',
+  description: 'Python version manager — install and switch any Python version',
+  category: 'Development',
+  profiles: ['backend', 'data'],
+  checkCommand: 'which pyenv || [ -d "$HOME/.pyenv" ]',
+  command: [
+    'sudo apt-get update',
+    'sudo apt-get install -y make build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev wget curl llvm libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev liblzma-dev git',
+    'curl https://pyenv.run | bash',
+  ].join(' && \\\n'),
+  postInstall: 'Add to ~/.bashrc: export PYENV_ROOT="$HOME/.pyenv" && export PATH="$PYENV_ROOT/bin:$PATH" && eval "$(pyenv init -)"  then run: pyenv install 3.12',
+  requiresReload: true,
+};
+
+const golang: Package = {
+  name: 'Go',
+  description: 'Go programming language (latest stable, from golang.org)',
+  category: 'Development',
+  profiles: ['backend', 'devops'],
+  checkCommand: 'which go',
+  command: [
+    'GO_VERSION=$(curl -fsSL "https://go.dev/VERSION?m=text" | head -1)',
+    'curl -fsSL "https://dl.google.com/go/${GO_VERSION}.linux-amd64.tar.gz" -o /tmp/go.tar.gz',
+    'sudo rm -rf /usr/local/go',
+    'sudo tar -C /usr/local -xzf /tmp/go.tar.gz',
+    'rm /tmp/go.tar.gz',
+  ].join(' && \\\n'),
+  postInstall: 'Add to ~/.bashrc: export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin',
+  requiresReload: true,
+};
+
 // ── JavaScript / Node.js ──────────────────────────────────
 
 const volta: Package = {
@@ -194,6 +226,45 @@ const kubectl: Package = {
   ].join(' && \\\n'),
 };
 
+// ── AI CLIs ───────────────────────────────────────────────
+
+const claudeCode: Package = {
+  name: 'Claude Code',
+  description: "Anthropic's agentic coding CLI",
+  category: 'AI CLIs',
+  checkCommand: 'which claude',
+  command: 'npm install -g @anthropic-ai/claude-code',
+  postInstall: 'Run: claude  to start. Requires npm (Node.js) to install.',
+};
+
+const githubCopilotCli: Package = {
+  name: 'GitHub Copilot CLI',
+  description: 'AI pair programmer as a gh extension',
+  category: 'AI CLIs',
+  checkCommand: "gh extension list 2>/dev/null | grep -q 'copilot'",
+  command: 'gh extension install github/gh-copilot',
+  postInstall: 'Run: gh copilot suggest "<what you want to do>"',
+  dependencies: ['GitHub CLI'],
+};
+
+const codex: Package = {
+  name: 'OpenAI Codex CLI',
+  description: 'OpenAI coding agent in the terminal',
+  category: 'AI CLIs',
+  checkCommand: 'which codex',
+  command: 'curl -fsSL https://chatgpt.com/codex/install.sh | sh',
+  postInstall: 'Run: codex  to start. Authenticate with your OpenAI account.',
+};
+
+const geminiCli: Package = {
+  name: 'Gemini CLI',
+  description: "Google's AI coding assistant CLI",
+  category: 'AI CLIs',
+  checkCommand: 'which gemini',
+  command: 'npm install -g @google/gemini-cli',
+  postInstall: 'Run: gemini  to start. Requires npm (Node.js) to install.',
+};
+
 // ── All packages (ordered) ────────────────────────────────
 
 const packages: Package[] = [
@@ -204,6 +275,8 @@ const packages: Package[] = [
   // Development
   buildEssentials,
   python3,
+  pyenv,
+  golang,
   // JavaScript
   volta,
   nodejs,
@@ -214,6 +287,11 @@ const packages: Package[] = [
   githubCli,
   gcloud,
   kubectl,
+  // AI CLIs
+  claudeCode,
+  githubCopilotCli,
+  codex,
+  geminiCli,
 ];
 
 export default packages;
